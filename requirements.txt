@@ -1,0 +1,7 @@
+google-adk
+livekit-agents
+livekit-plugins-google
+livekit-plugins-noise-cancellation~=0.2
+python-dotenv
+livekit-agents[deepgram,google,elevenlabs,silero,turn-detector,rime]~=1.0
+google-adk
