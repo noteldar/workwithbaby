@@ -96,6 +96,38 @@ async def get_slack_agent_async():
     return root_agent, exit_stack
 
 
+async def get_combined_agent_async():
+    """Creates an ADK Agent equipped with both Filesystem and Slack MCP tools."""
+    print("Setting up combined agent with both Filesystem and Slack tools...")
+
+    # Get both sets of tools
+    filesystem_tools, filesystem_exit_stack = await get_filesystem_tools_async()
+    slack_tools, slack_exit_stack = await get_slack_tools_async()
+
+    # Combine the tools from both sources
+    combined_tools = filesystem_tools + slack_tools
+    print(
+        f"Combined {len(filesystem_tools)} filesystem tools and {len(slack_tools)} Slack tools."
+    )
+
+    # Create an exit stack that will close both connections when done
+    from contextlib import AsyncExitStack
+
+    combined_exit_stack = AsyncExitStack()
+    await combined_exit_stack.enter_async_context(filesystem_exit_stack)
+    await combined_exit_stack.enter_async_context(slack_exit_stack)
+
+    # Create agent with combined tools
+    root_agent = LlmAgent(
+        model="gemini-2.0-flash",
+        name="combined_assistant",
+        instruction="Help user interact with both the local filesystem and Slack workspace using available tools.",
+        tools=combined_tools,
+    )
+
+    return root_agent, combined_exit_stack
+
+
 # --- Step 3: Main Execution Logic ---
 async def filesystem_main():
     session_service = InMemorySessionService()
@@ -170,10 +202,47 @@ async def slack_main():
     print("Cleanup complete.")
 
 
+async def combined_main():
+    """Run an agent with access to both Filesystem and Slack tools."""
+    session_service = InMemorySessionService()
+    artifacts_service = InMemoryArtifactService()
+
+    session = session_service.create_session(
+        state={}, app_name="mcp_combined_app", user_id="user_combined"
+    )
+
+    # Example query that could use both sets of tools
+    query = "list all files in the tasks/ folder and summarize them, send a message to eldartodo with the summary"
+    print(f"User Query: '{query}'")
+    content = types.Content(role="user", parts=[types.Part(text=query)])
+
+    root_agent, exit_stack = await get_combined_agent_async()
+
+    runner = Runner(
+        app_name="mcp_combined_app",
+        agent=root_agent,
+        artifact_service=artifacts_service,
+        session_service=session_service,
+    )
+
+    print("Running combined agent...")
+    events_async = runner.run_async(
+        session_id=session.id, user_id=session.user_id, new_message=content
+    )
+
+    async for event in events_async:
+        print(f"Event received: {event}")
+
+    print("Closing MCP server connections...")
+    await exit_stack.aclose()
+    print("Cleanup complete.")
+
+
 if __name__ == "__main__":
     try:
         # Choose which agent to run by uncommenting one of these lines:
         # asyncio.run(filesystem_main())
-        asyncio.run(slack_main())
+        # asyncio.run(slack_main())
+        asyncio.run(combined_main())
     except Exception as e:
         print(f"An error occurred: {e}")
