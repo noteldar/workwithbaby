@@ -212,7 +212,7 @@ async def combined_main():
     )
 
     # Example query that could use both sets of tools
-    query = "list all files in the tasks/ folder and summarize them, send a message to eldartodo with the summary"
+    query = "find text files in the tasks/ folder and send me attachment in slack"
     print(f"User Query: '{query}'")
     content = types.Content(role="user", parts=[types.Part(text=query)])
 
