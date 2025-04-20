@@ -228,15 +228,9 @@ class VoiceAssistant(Agent):
         # Validate channel is in the allowed list
         allowed_channels = list(channel_id_map.keys())
         if channel not in allowed_channels:
-            error_message = f"Invalid channel: {channel}. Must be one of: {', '.join(allowed_channels)}"
-            await context.session.say(error_message)
-            return error_message
+            return f"Invalid channel: {channel}. Must be one of: {', '.join(allowed_channels)}"
 
         try:
-            await context.session.say(
-                f"I'll read the latest {count} messages from the {channel} Slack channel."
-            )
-
             # Get the channel ID from our mapping
             channel_id = channel_id_map.get(channel)
 
@@ -294,91 +288,69 @@ class VoiceAssistant(Agent):
             # Clean up
             await exit_stack.aclose()
 
-            # Extract and format messages from the LLM response
-            formatted_messages = []
-
             # Join all raw content for processing
             combined_response = " ".join(raw_content)
 
-            # Look for patterns like:
-            # - "User: Message"
-            # - "Time/Date stamp - User: Message"
-            # - Message list items "1. User: Message"
+            # Clean and format the messages
+            clean_messages = []
+
+            # Look for common patterns in Slack API responses
             import re
 
-            # Try different regex patterns to extract messages
+            # Extract message data using regex patterns
+            # Try to find user messages in various formats
             message_patterns = [
+                r'(?:user|sender):\s*(\w+),?\s*text:\s*"?([^"]+)"?',  # Matches "user: X, text: Y"
                 r'(\w+):\s+"?([^"]+)"?',  # Simple "User: Message" format
-                r"(\d+\.\s+)?([^:]+):\s+(.+?)(?=\n\d+\.|\n[^:]+:|\Z)",  # Numbered list with timestamps
-                r"(\[\d{2}:\d{2}(:\d{2})?\])?\s*([^:]+):\s+(.+?)(?=\n\[|\n[^:]+:|\Z)",  # Timestamp format
+                r"\d+\.\s+([^:]+):\s+(.+?)(?=\n\d+\.|\n|$)",  # Numbered list format
             ]
 
-            messages_found = False
             for pattern in message_patterns:
                 matches = re.findall(pattern, combined_response)
                 if matches:
-                    # Process based on which pattern matched
-                    if pattern == message_patterns[0]:
-                        for match in matches:
-                            user, message = match
-                            formatted_messages.append(f"{user}: {message.strip()}")
-                    elif pattern == message_patterns[1]:
-                        for match in matches:
-                            _, user, message = match
-                            formatted_messages.append(
-                                f"{user.strip()}: {message.strip()}"
+                    for match in matches:
+                        if len(match) == 2:
+                            username, message = match
+                            # Clean up user IDs (convert U12345678 to a readable name)
+                            if re.match(r"^U[A-Z0-9]{8,}$", username):
+                                username = (
+                                    "User"  # Replace user IDs with generic "User"
+                                )
+                            clean_messages.append(f"{username}: {message.strip()}")
+
+            # If we didn't find matches with our patterns, try a simple line-by-line approach
+            if not clean_messages:
+                lines = combined_response.split("\n")
+                for line in lines:
+                    if ":" in line and len(line) > 10:
+                        # Try to extract username and message
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            username, message = parts
+                            # Clean up user IDs
+                            if re.match(r"^U[A-Z0-9]{8,}$", username.strip()):
+                                username = "User"
+                            clean_messages.append(
+                                f"{username.strip()}: {message.strip()}"
                             )
-                    elif pattern == message_patterns[2]:
-                        for match in matches:
-                            _, _, user, message = match
-                            formatted_messages.append(
-                                f"{user.strip()}: {message.strip()}"
-                            )
 
-                    messages_found = True
-                    break
+            # If we still have nothing, return a helpful message
+            if not clean_messages:
+                return f"I connected to the {channel} channel, but couldn't find any messages to read."
 
-            # Fallback if no messages were extracted with regex patterns
-            if not messages_found and combined_response:
-                # Try to find the section with the messages
-                if "Here are the recent messages" in combined_response:
-                    # Extract the section after this phrase
-                    message_section = combined_response.split(
-                        "Here are the recent messages"
-                    )[1]
-                    # Split by newlines and clean up
-                    lines = [
-                        line.strip()
-                        for line in message_section.split("\n")
-                        if line.strip()
-                    ]
-                    # Keep only lines that might be messages (contain user and content)
-                    formatted_messages = [
-                        line for line in lines if ":" in line and len(line) > 10
-                    ]
+            # Limit to requested count and remove duplicates (keep order)
+            unique_messages = []
+            for msg in clean_messages:
+                if msg not in unique_messages:
+                    unique_messages.append(msg)
 
-            # If we got messages, speak them; otherwise provide a helpful message
-            if formatted_messages:
-                # Limit to the requested count
-                messages_to_read = formatted_messages[:count]
-                message_text = "\n".join(messages_to_read)
+            # Take only the requested number of messages
+            final_messages = unique_messages[:count]
 
-                # Speak a more human-friendly version
-                speak_text = (
-                    f"Here are the latest messages from the {channel} channel: "
-                )
-                for msg in messages_to_read:
-                    speak_text += f"\n{msg}"
-
-                await context.session.say(speak_text)
-                return f"Retrieved {len(messages_to_read)} messages from {channel}"
-            else:
-                # No messages could be parsed
-                await context.session.say(
-                    f"I was able to connect to the {channel} channel, but couldn't parse any messages. "
-                    f"This might be due to the channel being empty or a formatting issue."
-                )
-                return "No messages could be parsed"
+            # Return a simple, clean string with the messages
+            return f"Here are the latest messages from {channel}:\n" + "\n".join(
+                final_messages
+            )
 
         except Exception as e:
             error_message = f"Error reading messages from Slack: {str(e)}"
