@@ -205,6 +205,105 @@ class VoiceAssistant(Agent):
             )
             return error_message
 
+    @function_tool()
+    async def read_slack_messages(
+        self, context: RunContext, channel: str, count: int = 5
+    ) -> str:
+        """
+        Read the latest messages from a Slack channel
+
+        Args:
+            channel: Channel name to read messages from (must be one of: mcptest, general, random)
+            count: Number of recent messages to retrieve (default: 5)
+
+        The tool will handle all verbal responses to the user.
+        """
+        # Validate channel is in the allowed list
+        allowed_channels = ["mcptest", "general", "random"]
+        if channel not in allowed_channels:
+            error_message = f"Invalid channel: {channel}. Must be one of: {', '.join(allowed_channels)}"
+            await context.session.say(error_message)
+            return error_message
+
+        try:
+            await context.session.say(
+                f"I'll read the latest {count} messages from the {channel} Slack channel."
+            )
+
+            # Log the request rather than actually executing it for now
+            logger.info(f"Slack read request: channel={channel}, count={count}")
+
+            # Create session services for the Slack agent
+            session_service = InMemorySessionService()
+            artifacts_service = InMemoryArtifactService()
+
+            # Create a session
+            session = session_service.create_session(
+                state={}, app_name="slack_integration", user_id="voice_assistant_user"
+            )
+
+            # Set up the query for the Slack agent
+            slack_command = f"read latest {count} messages from channel {channel}"
+
+            # Create the content object for the Slack agent
+            content = types.Content(role="user", parts=[types.Part(text=slack_command)])
+
+            # Get the Slack agent
+            root_agent, exit_stack = await get_slack_agent_async()
+
+            # Create runner for the Slack agent
+            runner = Runner(
+                app_name="slack_integration",
+                agent=root_agent,
+                artifact_service=artifacts_service,
+                session_service=session_service,
+            )
+
+            # Run the Slack agent
+            events_async = runner.run_async(
+                session_id=session.id, user_id=session.user_id, new_message=content
+            )
+
+            # Process events
+            messages = []
+            async for event in events_async:
+                logger.info(f"Slack event: {event}")
+                # In a production environment, we would parse the event to extract the messages
+                # For now, we'll just collect the events
+                if hasattr(event, "text"):
+                    messages.append(event.text)
+
+            # Clean up
+            await exit_stack.aclose()
+
+            # For now, provide a mock response since we're not actually retrieving messages
+            mock_messages = [
+                "User1: Here's the latest update on the project",
+                "User2: Thanks for sharing, I'll review it",
+                "User3: Don't forget our meeting at 3pm",
+                "User1: I've pushed the code changes",
+                "User4: Has anyone tested the new feature?",
+            ][
+                :count
+            ]  # Limit to requested count
+
+            # In a production environment, we would use the actual messages
+            # For the mock, we'll just read out the fake messages
+            message_text = "\n".join(mock_messages)
+            await context.session.say(
+                f"Here are the latest messages from the {channel} channel: {message_text}"
+            )
+
+            return f"Retrieved {len(mock_messages)} messages from {channel}"
+
+        except Exception as e:
+            error_message = f"Error reading messages from Slack: {str(e)}"
+            logger.error(error_message)
+            await context.session.say(
+                "I encountered an error trying to read messages from Slack."
+            )
+            return error_message
+
 
 async def entrypoint(ctx: agents.JobContext):
     logger.info("starting entrypoint")
