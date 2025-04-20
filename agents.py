@@ -51,6 +51,13 @@ async def get_slack_tools_async():
     # Environment variables needed for Slack MCP server
     # Make sure these are set in your .env file:
     # - SLACK_BOT_TOKEN: The Bot User OAuth Token starting with `xoxb-`
+    #   Required scopes for reading messages:
+    #   - channels:history - Read messages in public channels
+    #   - groups:history - Read messages in private channels
+    #   - im:history - Read direct messages
+    #   - mpim:history - Read messages in group direct messages
+    #   - channels:read - View basic info about public channels
+    #   - groups:read - View basic info about private channels
     # - SLACK_TEAM_ID: Your Slack workspace ID starting with `T`
     # - SLACK_CHANNEL_IDS: Optional comma-separated list of channel IDs
 
@@ -202,6 +209,48 @@ async def slack_main():
     print("Cleanup complete.")
 
 
+async def slack_read_messages():
+    """Example function to specifically read messages from a Slack channel."""
+    session_service = InMemorySessionService()
+    artifacts_service = InMemoryArtifactService()
+
+    session = session_service.create_session(
+        state={}, app_name="mcp_slack_read", user_id="user_slack_read"
+    )
+
+    # Specify the channel to read from and message count
+    channel_name = "general"  # Change to your desired channel
+    message_count = 5
+
+    # Query specifically asking for recent messages
+    query = (
+        f"get the {message_count} most recent messages from the #{channel_name} channel"
+    )
+    print(f"User Query: '{query}'")
+    content = types.Content(role="user", parts=[types.Part(text=query)])
+
+    root_agent, exit_stack = await get_slack_agent_async()
+
+    runner = Runner(
+        app_name="mcp_slack_read",
+        agent=root_agent,
+        artifact_service=artifacts_service,
+        session_service=session_service,
+    )
+
+    print(f"Reading messages from #{channel_name}...")
+    events_async = runner.run_async(
+        session_id=session.id, user_id=session.user_id, new_message=content
+    )
+
+    async for event in events_async:
+        print(f"Message data: {event}")
+
+    print("Closing Slack MCP server connection...")
+    await exit_stack.aclose()
+    print("Cleanup complete.")
+
+
 async def combined_main():
     """Run an agent with access to both Filesystem and Slack tools."""
     session_service = InMemorySessionService()
@@ -243,6 +292,9 @@ if __name__ == "__main__":
         # Choose which agent to run by uncommenting one of these lines:
         # asyncio.run(filesystem_main())
         # asyncio.run(slack_main())
-        asyncio.run(combined_main())
+        # asyncio.run(combined_main())
+
+        # For testing Slack message reading specifically:
+        asyncio.run(slack_read_messages())
     except Exception as e:
         print(f"An error occurred: {e}")

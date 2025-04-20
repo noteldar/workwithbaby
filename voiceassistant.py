@@ -230,7 +230,7 @@ class VoiceAssistant(Agent):
                 f"I'll read the latest {count} messages from the {channel} Slack channel."
             )
 
-            # Log the request rather than actually executing it for now
+            # Log the request
             logger.info(f"Slack read request: channel={channel}, count={count}")
 
             # Create session services for the Slack agent
@@ -243,7 +243,7 @@ class VoiceAssistant(Agent):
             )
 
             # Set up the query for the Slack agent
-            slack_command = f"read latest {count} messages from channel {channel}"
+            slack_command = f"get latest {count} messages from channel {channel}"
 
             # Create the content object for the Slack agent
             content = types.Content(role="user", parts=[types.Part(text=slack_command)])
@@ -264,37 +264,41 @@ class VoiceAssistant(Agent):
                 session_id=session.id, user_id=session.user_id, new_message=content
             )
 
-            # Process events
-            messages = []
+            # Process events to extract actual messages
+            real_messages = []
             async for event in events_async:
                 logger.info(f"Slack event: {event}")
-                # In a production environment, we would parse the event to extract the messages
-                # For now, we'll just collect the events
-                if hasattr(event, "text"):
-                    messages.append(event.text)
+                # Parse LLM response for message content
+                if hasattr(event, "content") and event.content:
+                    # Extract message data from the content
+                    content_text = (
+                        event.content.text
+                        if hasattr(event.content, "text")
+                        else str(event.content)
+                    )
+                    # Look for message patterns in the response
+                    if (
+                        ":" in content_text
+                    ):  # Simple heuristic to identify user messages
+                        real_messages.append(content_text)
 
             # Clean up
             await exit_stack.aclose()
 
-            # For now, provide a mock response since we're not actually retrieving messages
-            mock_messages = [
-                "User1: Here's the latest update on the project",
-                "User2: Thanks for sharing, I'll review it",
-                "User3: Don't forget our meeting at 3pm",
-                "User1: I've pushed the code changes",
-                "User4: Has anyone tested the new feature?",
-            ][
-                :count
-            ]  # Limit to requested count
-
-            # In a production environment, we would use the actual messages
-            # For the mock, we'll just read out the fake messages
-            message_text = "\n".join(mock_messages)
-            await context.session.say(
-                f"Here are the latest messages from the {channel} channel: {message_text}"
-            )
-
-            return f"Retrieved {len(mock_messages)} messages from {channel}"
+            # If we got real messages, use them; otherwise fall back to a simple message
+            if real_messages:
+                # Limit to the requested count
+                messages_to_read = real_messages[:count]
+                message_text = "\n".join(messages_to_read)
+                await context.session.say(
+                    f"Here are the latest messages from the {channel} channel: {message_text}"
+                )
+                return f"Retrieved {len(messages_to_read)} messages from {channel}"
+            else:
+                await context.session.say(
+                    f"I was able to connect to the {channel} channel, but couldn't retrieve the message content properly. This might be due to permission issues or the channel being empty."
+                )
+                return "Could not retrieve message content"
 
         except Exception as e:
             error_message = f"Error reading messages from Slack: {str(e)}"
