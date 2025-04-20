@@ -32,7 +32,7 @@ async def get_filesystem_tools_async():
                 "-y",  # Arguments for the command
                 "@modelcontextprotocol/server-filesystem",
                 # TODO: IMPORTANT! Change the path below to an ABSOLUTE path on your system.
-                "/Users/eldar/workwithbaby",
+                "/home/eldar/workwithbaby",
             ],
         )
         # For remote servers, you would use SseServerParams instead:
@@ -218,16 +218,10 @@ async def slack_read_messages():
         state={}, app_name="mcp_slack_read", user_id="user_slack_read"
     )
 
-    # Specify the channel to read from and message count
-    channel_name = "general"  # Change to your desired channel
-    message_count = 5
-
-    # Query specifically asking for recent messages
-    query = (
-        f"get the {message_count} most recent messages from the #{channel_name} channel"
-    )
-    print(f"User Query: '{query}'")
-    content = types.Content(role="user", parts=[types.Part(text=query)])
+    # First, get a list of all channels to find the ID
+    print("Getting channel list first...")
+    list_query = "list all slack channels and show their IDs"
+    list_content = types.Content(role="user", parts=[types.Part(text=list_query)])
 
     root_agent, exit_stack = await get_slack_agent_async()
 
@@ -238,11 +232,35 @@ async def slack_read_messages():
         session_service=session_service,
     )
 
-    print(f"Reading messages from #{channel_name}...")
+    print("Listing channels to find channel ID...")
+    list_events = runner.run_async(
+        session_id=session.id, user_id=session.user_id, new_message=list_content
+    )
+
+    # Print channel list to help user find channel IDs
+    async for event in list_events:
+        print(f"Channel list info: {event}")
+
+    # Now read messages using channel ID instead of name
+    channel_id = "C08NEV03L23"
+
+    # Query using ID instead of name
+    query = f"get the 5 most recent messages from channel ID {channel_id}"
+    print(f"User Query: '{query}'")
+    content = types.Content(role="user", parts=[types.Part(text=query)])
+
+    # Create new session for message fetching
+    session = session_service.create_session(
+        state={}, app_name="mcp_slack_read", user_id="user_slack_read"
+    )
+
+    # Re-use the existing runner with a new session
+    print(f"Reading messages from channel ID {channel_id}...")
     events_async = runner.run_async(
         session_id=session.id, user_id=session.user_id, new_message=content
     )
 
+    print("\nMessage content:")
     async for event in events_async:
         print(f"Message data: {event}")
 

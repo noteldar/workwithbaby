@@ -218,8 +218,15 @@ class VoiceAssistant(Agent):
 
         The tool will handle all verbal responses to the user.
         """
+        # Channel ID mapping (you need to replace these with actual channel IDs from your workspace)
+        channel_id_map = {
+            "mcptest": "C08NEV03L23",  # Replace with real channel ID
+            "general": "CG9DQQUQ5",  # Replace with real channel ID
+            "random": "CG948BT5Y",  # Replace with real channel ID
+        }
+
         # Validate channel is in the allowed list
-        allowed_channels = ["mcptest", "general", "random"]
+        allowed_channels = list(channel_id_map.keys())
         if channel not in allowed_channels:
             error_message = f"Invalid channel: {channel}. Must be one of: {', '.join(allowed_channels)}"
             await context.session.say(error_message)
@@ -230,8 +237,13 @@ class VoiceAssistant(Agent):
                 f"I'll read the latest {count} messages from the {channel} Slack channel."
             )
 
+            # Get the channel ID from our mapping
+            channel_id = channel_id_map.get(channel)
+
             # Log the request
-            logger.info(f"Slack read request: channel={channel}, count={count}")
+            logger.info(
+                f"Slack read request: channel={channel} (ID: {channel_id}), count={count}"
+            )
 
             # Create session services for the Slack agent
             session_service = InMemorySessionService()
@@ -243,7 +255,9 @@ class VoiceAssistant(Agent):
             )
 
             # Set up the query for the Slack agent
-            slack_command = f"get latest {count} messages from channel {channel}"
+            slack_command = (
+                f"get the {count} most recent messages from channel ID {channel_id}"
+            )
 
             # Create the content object for the Slack agent
             content = types.Content(role="user", parts=[types.Part(text=slack_command)])
@@ -264,41 +278,107 @@ class VoiceAssistant(Agent):
                 session_id=session.id, user_id=session.user_id, new_message=content
             )
 
-            # Process events to extract actual messages
-            real_messages = []
+            # Process events to extract and format messages
+            raw_content = []
             async for event in events_async:
                 logger.info(f"Slack event: {event}")
-                # Parse LLM response for message content
                 if hasattr(event, "content") and event.content:
-                    # Extract message data from the content
+                    # Collect raw content from events
                     content_text = (
                         event.content.text
                         if hasattr(event.content, "text")
                         else str(event.content)
                     )
-                    # Look for message patterns in the response
-                    if (
-                        ":" in content_text
-                    ):  # Simple heuristic to identify user messages
-                        real_messages.append(content_text)
+                    raw_content.append(content_text)
 
             # Clean up
             await exit_stack.aclose()
 
-            # If we got real messages, use them; otherwise fall back to a simple message
-            if real_messages:
+            # Extract and format messages from the LLM response
+            formatted_messages = []
+
+            # Join all raw content for processing
+            combined_response = " ".join(raw_content)
+
+            # Look for patterns like:
+            # - "User: Message"
+            # - "Time/Date stamp - User: Message"
+            # - Message list items "1. User: Message"
+            import re
+
+            # Try different regex patterns to extract messages
+            message_patterns = [
+                r'(\w+):\s+"?([^"]+)"?',  # Simple "User: Message" format
+                r"(\d+\.\s+)?([^:]+):\s+(.+?)(?=\n\d+\.|\n[^:]+:|\Z)",  # Numbered list with timestamps
+                r"(\[\d{2}:\d{2}(:\d{2})?\])?\s*([^:]+):\s+(.+?)(?=\n\[|\n[^:]+:|\Z)",  # Timestamp format
+            ]
+
+            messages_found = False
+            for pattern in message_patterns:
+                matches = re.findall(pattern, combined_response)
+                if matches:
+                    # Process based on which pattern matched
+                    if pattern == message_patterns[0]:
+                        for match in matches:
+                            user, message = match
+                            formatted_messages.append(f"{user}: {message.strip()}")
+                    elif pattern == message_patterns[1]:
+                        for match in matches:
+                            _, user, message = match
+                            formatted_messages.append(
+                                f"{user.strip()}: {message.strip()}"
+                            )
+                    elif pattern == message_patterns[2]:
+                        for match in matches:
+                            _, _, user, message = match
+                            formatted_messages.append(
+                                f"{user.strip()}: {message.strip()}"
+                            )
+
+                    messages_found = True
+                    break
+
+            # Fallback if no messages were extracted with regex patterns
+            if not messages_found and combined_response:
+                # Try to find the section with the messages
+                if "Here are the recent messages" in combined_response:
+                    # Extract the section after this phrase
+                    message_section = combined_response.split(
+                        "Here are the recent messages"
+                    )[1]
+                    # Split by newlines and clean up
+                    lines = [
+                        line.strip()
+                        for line in message_section.split("\n")
+                        if line.strip()
+                    ]
+                    # Keep only lines that might be messages (contain user and content)
+                    formatted_messages = [
+                        line for line in lines if ":" in line and len(line) > 10
+                    ]
+
+            # If we got messages, speak them; otherwise provide a helpful message
+            if formatted_messages:
                 # Limit to the requested count
-                messages_to_read = real_messages[:count]
+                messages_to_read = formatted_messages[:count]
                 message_text = "\n".join(messages_to_read)
-                await context.session.say(
-                    f"Here are the latest messages from the {channel} channel: {message_text}"
+
+                # Speak a more human-friendly version
+                speak_text = (
+                    f"Here are the latest messages from the {channel} channel: "
                 )
+                for msg in messages_to_read:
+                    speak_text += f"\n{msg}"
+
+                await context.session.say(speak_text)
                 return f"Retrieved {len(messages_to_read)} messages from {channel}"
             else:
+                # No messages could be parsed
                 await context.session.say(
-                    f"I was able to connect to the {channel} channel, but couldn't retrieve the message content properly. This might be due to permission issues or the channel being empty."
+                    f"I was able to connect to the {channel} channel, but couldn't parse any messages. "
+                    f"This might be due to the channel being empty or a formatting issue."
                 )
-                return "Could not retrieve message content"
+                return "No messages could be parsed"
 
         except Exception as e:
             error_message = f"Error reading messages from Slack: {str(e)}"
